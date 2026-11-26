@@ -1,0 +1,1 @@
+const SUPABASE_URL='https://yiwrzkknwsuqfcporcen.supabase.co', SUPABASE_KEY='sb_publishable_9wILI3jYbNA8UOjbdQITVg_f7gHiq8b';
