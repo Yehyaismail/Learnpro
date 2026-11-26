@@ -47,10 +47,8 @@ th,td{padding:8px;text-align:start;border-bottom:1px solid var(--ln);white-space
 </style></head>
 <body><div id="root"></div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="config.js"></script>
 <script>
-// ===== ضع بيانات مشروعك من Supabase > Project Settings > API =====
-const SUPABASE_URL='https://yiwrzkknwsuqfcporcen.supabase.co', SUPABASE_KEY='sb_publishable_9wILI3jYbNA8UOjbdQITVg_f7gHiq8b';
-// ================================================================
 const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 const $=s=>document.querySelector(s),$r=$('#root');
 function h(t,a,...k){const e=document.createElement(t);for(const x in a||{}){const v=a[x];if(v==null||v===false)continue;if(x==='class')e.className=v;else if(x.startsWith('on'))e.addEventListener(x.slice(2),v);else e.setAttribute(x,v===true?'':v)}for(const c of k.flat())if(c!=null&&c!==false)e.append(c.nodeType?c:String(c));return e}
@@ -92,7 +90,7 @@ async function start(){
   me=data;
   if(!me||me.banned){await sb.auth.signOut();$r.replaceChildren(h('div',{class:'card'},h('h2',{},'الحساب غير متاح'),h('div',{class:'mu'},'تم حظر هذا الحساب. تواصل مع المسؤول.')));return}
   mainView();await loadAll();subscribe();
-  setInterval(async()=>{if(document.hidden)return;await sb.from('profiles').update({last_seen:new Date().toISOString()}).eq('id',me.id);loadUsers()},30000);
+  setInterval(async()=>{if(document.hidden)return;await sb.from('profiles').update({last_seen:new Date().toISOString()}).eq('id',me.id);loadMeta().then(loadUsers)},30000);
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)markRead()});
 }
 
@@ -110,11 +108,11 @@ function subscribe(){
      if(p.eventType==='INSERT'){
        if(msgs.some(x=>x.id===m.id))return;
        msgs.unshift(m);
-       if(!chats.some(c=>c.id===m.chat_id)){loadMeta()}
+       if(!chats.some(c=>c.id===m.chat_id)){loadMeta().then(loadUsers)}
        notify(m);if(m.chat_id===cur&&!document.hidden)markRead();
      }else if(p.eventType==='UPDATE')msgs=msgs.map(x=>x.id===m.id?m:x);
      renderList();renderChat();})
-   .on('postgres_changes',{event:'*',schema:'public',table:'chat_members'},loadMeta)
+   .on('postgres_changes',{event:'*',schema:'public',table:'chat_members'},()=>loadMeta().then(loadUsers))
    .subscribe();
 }
 function notify(m){
@@ -135,7 +133,7 @@ function mainView(){
   const app=h('div',{id:'app'},
     h('div',{id:'side'},
       h('div',{class:'bar'},h('b',{id:'myname',onclick:settings,style:'cursor:pointer'},me.name),
-        h('button',{class:'g',onclick:newChat},'＋ جديدة'),h('button',{class:'g',onclick:settings},'⚙️')),
+        me.is_admin&&h('button',{class:'g',onclick:newChat},'＋ جديدة'),h('button',{class:'g',onclick:settings},'⚙️')),
       h('input',{id:'sq',placeholder:'بحث في المحادثات',oninput:renderList}),
       h('div',{id:'list'})),
     h('div',{id:'chat'},
@@ -149,6 +147,7 @@ function mainView(){
 function renderList(){
   const l=$('#list');if(!l)return;const q=($('#sq').value||'').toLowerCase();
   $('#myname').textContent=me.name;
+  const tu=chats.reduce((t,c)=>t+unread(c),0);document.title=(tu?'('+tu+') ':'')+'شات';
   const rows=chats.filter(c=>title(c).toLowerCase().includes(q)).map(c=>({c,m:lastOf(c.id),p:(mem(c.id,me.id)||{}).pinned}))
     .sort((a,b)=>(b.p-a.p)||(new Date(b.m?b.m.created_at:0)-new Date(a.m?a.m.created_at:0)));
   l.replaceChildren(...rows.map(({c,m,p})=>{
@@ -158,7 +157,7 @@ function renderList(){
       h('div',{class:'t'},h('div',{},h('b',{},(p?'📌 ':'')+title(c))),h('div',{class:'mu'},m?(m.deleted?'🚫 رسالة محذوفة':m.body):'لا رسائل بعد')),
       u>0&&h('span',{class:'badge'},u));
   }));
-  if(!rows.length)l.append(h('div',{class:'mu',style:'padding:16px'},'لا محادثات. اضغط ＋ جديدة للبدء.'));
+  if(!rows.length)l.append(h('div',{class:'mu',style:'padding:16px'},(me.is_admin?'لا محادثات. اضغط ＋ جديدة للبدء.':'لا محادثات بعد.')));
 }
 function openChat(id){cur=id;replyTo=null;$('#app').classList.add('open');setReply(null);renderList();renderChat();markRead()}
 function renderChat(){
@@ -198,20 +197,17 @@ function sheet(m){
       msgs=msgs.map(x=>x.id===m.id?{...x,deleted:true}:x);renderList();renderChat()}},'🗑 حذف للجميع'));
 }
 function newChat(){
-  const sel=new Set(),q=h('input',{placeholder:'بحث عن مستخدم'}),ti=h('input',{placeholder:'اسم المجموعة',class:'hide'}),list=h('div',{class:'ul'}),go=h('button',{},'ابدأ');
-  const draw=()=>{
-    ti.classList.toggle('hide',sel.size<2);go.textContent=sel.size>1?'إنشاء مجموعة':'ابدأ محادثة';
-    list.replaceChildren(...Object.values(users).filter(u=>u.id!==me.id&&!u.banned&&(u.name||'').toLowerCase().includes(q.value.toLowerCase())).map(u=>
-      h('label',{class:'it'},h('input',{type:'checkbox',checked:sel.has(u.id),onchange:e=>{e.target.checked?sel.add(u.id):sel.delete(u.id);ti.classList.toggle('hide',sel.size<2);go.textContent=sel.size>1?'إنشاء مجموعة':'ابدأ محادثة'}}),
-        h('div',{class:'t'},h('b',{},u.name),h('div',{class:'mu'},u.about||'')))));
-  };
+  const sel=new Map(),q=h('input',{placeholder:'بحث عن مستخدم'}),ti=h('input',{placeholder:'اسم المجموعة',class:'hide'}),list=h('div',{class:'ul'}),go=h('button',{},'ابدأ محادثة');
+  const upd=()=>{ti.classList.toggle('hide',sel.size<2);go.textContent=sel.size>1?'إنشاء مجموعة':'ابدأ محادثة'};
+  const draw=()=>list.replaceChildren(...Object.values(users).filter(u=>u.id!==me.id&&!u.banned&&(u.name||'').toLowerCase().includes(q.value.toLowerCase())).map(u=>
+    h('label',{class:'it'},h('input',{type:'checkbox',checked:sel.has(u.id),onchange:e=>{e.target.checked?sel.set(u.id,u.name):sel.delete(u.id);upd()}}),h('b',{},u.name))));
   q.oninput=draw;draw();
   const o=modal(h('b',{},'محادثة جديدة'),q,list,ti,go);
   go.onclick=async()=>{
     if(!sel.size)return;
-    const r=await sb.rpc('create_chat',{p_title:ti.value.trim()||null,p_group:sel.size>1,p_members:[...sel]});
+    const r=await sb.rpc('create_chat',{p_title:ti.value.trim()||null,p_group:sel.size>1,p_members:[...sel.keys()]});
     if(r.error)return alert(r.error.message);
-    await loadMeta();o.remove();openChat(r.data);
+    await Promise.all([loadMeta(),loadUsers()]);o.remove();openChat(r.data);
   };
 }
 function settings(){
