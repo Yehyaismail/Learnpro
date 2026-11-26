@@ -90,6 +90,7 @@ async function start(){
   me=data;
   if(!me||me.banned){await sb.auth.signOut();$r.replaceChildren(h('div',{class:'card'},h('h2',{},'الحساب غير متاح'),h('div',{class:'mu'},'تم حظر هذا الحساب. تواصل مع المسؤول.')));return}
   mainView();await loadAll();subscribe();
+  setInterval(()=>{if(document.hidden)return;tick++;if(!rtOk||tick%10===0)poll();if(tick%15===0)loadAll()},2000);
   setInterval(async()=>{if(document.hidden)return;await sb.from('profiles').update({last_seen:new Date().toISOString()}).eq('id',me.id);loadMeta().then(loadUsers)},30000);
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)markRead()});
 }
@@ -113,7 +114,19 @@ function subscribe(){
      }else if(p.eventType==='UPDATE')msgs=msgs.map(x=>x.id===m.id?m:x);
      renderList();renderChat();})
    .on('postgres_changes',{event:'*',schema:'public',table:'chat_members'},()=>loadMeta().then(loadUsers))
-   .subscribe();
+   .subscribe(st=>{rtOk=(st==='SUBSCRIBED')});
+}
+let rtOk=false,tick=0;
+async function poll(){
+  const newest=msgs.length?msgs[0].created_at:'1970-01-01T00:00:00Z';
+  const r=await sb.from('messages').select('*').gt('created_at',newest).order('created_at',{ascending:false}).limit(200);
+  const fresh=(r.data||[]).filter(m=>!msgs.some(x=>x.id===m.id));
+  if(!fresh.length)return;
+  msgs=[...fresh,...msgs];
+  if(fresh.some(m=>!chats.some(c=>c.id===m.chat_id))){await loadMeta();await loadUsers()}
+  fresh.forEach(notify);
+  if(fresh.some(m=>m.chat_id===cur)&&!document.hidden)markRead();
+  renderList();renderChat();
 }
 function notify(m){
   if(m.sender_id===me.id)return;const mm=mem(m.chat_id,me.id);if(mm&&mm.muted)return;
